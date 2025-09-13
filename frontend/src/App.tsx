@@ -1,7 +1,7 @@
 import './App.css'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import { Sender } from './Sender'
-import { Receiver } from './Receiver'
+import { Room } from './Room'
+import { Home } from './Home'
 
 function App() {
 
@@ -9,8 +9,8 @@ function App() {
     <>
       <BrowserRouter>
         <Routes>
-          <Route path='/sender' element={<Sender />}></Route>
-          <Route path='/receiver' element={<Receiver />}></Route>
+          <Route path='/' element={<Home />}></Route>
+          <Route path='/room' element={<Room />}></Route>
         </Routes>
       </BrowserRouter>
     </>

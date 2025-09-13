@@ -1,45 +1,64 @@
 import { useEffect } from "react"
+
 export const Receiver = () => {
-
   useEffect(() => {
-    const socket = new WebSocket('ws://localhost:8080');
+    const socket = new WebSocket("ws://localhost:8080")
     socket.onopen = () => {
-      socket.send(JSON.stringify({
-        type: 'receiver'
-      }));
+      socket.send(JSON.stringify({ type: "receiver" }))
     }
-    startReceiving(socket);
-  }, []);
 
-  function startReceiving(socket: WebSocket) {
-    const video = document.createElement('video');
-    document.body.appendChild(video);
+    const video = document.createElement("video")
+    video.autoplay = true
+    video.playsInline = true
+    video.muted = true
+    document.body.appendChild(video)
 
-    const pc = new RTCPeerConnection();
+    const pc = new RTCPeerConnection()
+    let remoteDescriptionSet = false
+    let pendingCandidates: RTCIceCandidateInit[] = []
+
     pc.ontrack = (event) => {
-      video.srcObject = new MediaStream([event.track]);
-      video.play();
-    }
+      console.log("track received", event.streams)
+      if (event.streams && event.streams[0]) {
+        video.srcObject = event.streams[0]
 
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'createOffer') {
-        pc.setRemoteDescription(message.sdp).then(() => {
-          pc.createAnswer().then((answer) => {
-            pc.setLocalDescription(answer);
-            socket.send(JSON.stringify({
-              type: 'createAnswer',
-              sdp: answer
-            }));
-          });
-        });
-      } else if (message.type === 'iceCandidate') {
-        pc.addIceCandidate(message.candidate);
+        video.onloadedmetadata = () => {
+          console.log("✅ Video metadata loaded, playing stream")
+          video.play().catch(err => console.error("Video play error:", err))
+        }
       }
     }
-  }
 
-  return <div>
+    socket.onmessage = async (event: MessageEvent<any>) => {
+      const message = JSON.parse(event.data)
 
-  </div>
+      if (message.type === "offer") {
+        console.log("offer received")
+        await pc.setRemoteDescription(message.sdb)
+        remoteDescriptionSet = true
+
+        const answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        socket.send(JSON.stringify({
+          type: "create-answer",
+          sdb: answer,
+        }))
+
+        for (const c of pendingCandidates) {
+          await pc.addIceCandidate(c)
+        }
+        pendingCandidates = []
+      } else if (message.type === "ice-candidate") {
+        if (remoteDescriptionSet) {
+          await pc.addIceCandidate(message.candidate)
+        } else {
+          pendingCandidates.push(message.candidate)
+        }
+      }
+    }
+  }, [])
+
+  return <div></div>
 }
+
