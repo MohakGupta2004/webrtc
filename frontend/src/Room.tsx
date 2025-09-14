@@ -1,224 +1,170 @@
-import { useCallback, useEffect, useState, useRef } from "react";
-import { useSocket } from "./SocketContext";
-import ReactPlayer from 'react-player';
-import peer from "./peer";
+import { useEffect, useCallback, useState } from "react";
+import ReactPlayer from "react-player";
+import peer from "./peer.ts";
+import { useSocket } from "./SocketContext.tsx";
+import type { Socket } from "socket.io-client";
 
-export const Room = () => {
-  const { socket, send, addEventListener, removeEventListener } = useSocket();
-  const peerRef = useRef(peer);
-  const [remoteSocketId, setRemoteSocketId] = useState<string | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [myStream, setMyStream] = useState<MediaStream | null>(null);
+const Room = () => {
+  const socket = useSocket();
+  const [remoteSocketId, setRemoteSocketId] = useState<string>();
+  const [myStream, setMyStream] = useState<MediaStream>();
+  const [remoteStream, setRemoteStream] = useState<MediaStream>();
 
-  // Handle user joined
-  const handleUserJoined = useCallback((email: string, socketId: string) => {
-    console.log(`Email ${email} joined with socket ID: ${socketId}`);
-    setRemoteSocketId(socketId);
+  const handleUserJoined = useCallback(({ email, id }: {
+    email: string;
+    id: Socket["id"]
+  }) => {
+    console.log(`Email ${email} joined room`);
+    setRemoteSocketId(id);
   }, []);
 
-  // Handle incoming call
-  const handleIncomingCall = useCallback(async (from: string, offer: RTCSessionDescriptionInit) => {
-    console.log("Incoming call from:", from);
-    setRemoteSocketId(from);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      setMyStream(stream);
-      
-      const ans = await peerRef.current.getAnswer(offer);
-      if (send) {
-        send(JSON.stringify({
-          type: 'call:accepted',
-          to: from,
-          ans
-        }));
-      }
-    } catch (err) {
-      console.error("Error handling incoming call:", err);
-    }
-  }, [send]);
+  const handleCallUser = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: true
+    });
+    const offer = await peer.getOffer();
+    socket.emit("user:call", { to: remoteSocketId, offer });
+    setMyStream(stream);
+  }, [remoteSocketId, socket]);
 
-  // Handle call accepted
-  const handleCallAccepted = useCallback(async (from: string, ans: RTCSessionDescriptionInit) => {
-    console.log("Call accepted by:", from);
-    await peerRef.current.setLocalDescription(ans);
+  const handleIncommingCall = useCallback(
+    async ({ from, offer }: {
+      from: Socket["id"]
+      offer: RTCSessionDescriptionInit
+    }) => {
+      setRemoteSocketId(from);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: true,
+      });
+      setMyStream(stream);
+      console.log(`Incoming Call`, from, offer);
+      const ans = await peer.getAnswer(offer);
+      socket.emit("call:accepted", { to: from, ans });
+    },
+    [socket]
+  );
+
+  const sendStreams = useCallback(() => {
+    if (!myStream || !peer?.peer) return;
+
+    const senders = peer.peer.getSenders();
+
+    for (const track of myStream.getTracks()) {
+      const alreadySending = senders.find(sender => sender.track === track);
+      if (!alreadySending) {
+        peer.peer.addTrack(track, myStream);
+      }
+    }
+  }, [myStream]);
+  const handleCallAccepted = useCallback(
+    ({ ans }: {
+      from: Socket["id"];
+      ans: RTCSessionDescriptionInit;
+    }) => {
+      peer.setLocalDescription(ans);
+      console.log("Call Accepted!");
+      sendStreams();
+    },
+    [sendStreams]
+  );
+
+  const handleNegoNeeded = useCallback(async () => {
+    const offer = await peer.getOffer();
+    socket.emit("peer:nego:needed", { offer, to: remoteSocketId });
+  }, [remoteSocketId, socket]);
+
+  useEffect(() => {
+    if (!peer.peer) return;
+    peer.peer.addEventListener("negotiationneeded", handleNegoNeeded);
+    return () => {
+      if (!peer.peer) return;
+      peer.peer.removeEventListener("negotiationneeded", handleNegoNeeded);
+    };
+  }, [handleNegoNeeded]);
+
+  const handleNegoNeedIncomming = useCallback(
+    async ({ from, offer }: {
+      from: Socket["id"];
+      offer: RTCSessionDescriptionInit;
+    }) => {
+      const ans = await peer.getAnswer(offer);
+      socket.emit("peer:nego:done", { to: from, ans });
+    },
+    [socket]
+  );
+
+  const handleNegoNeedFinal = useCallback(async ({ ans }: {
+    ans: RTCSessionDescriptionInit;
+  }) => {
+    await peer.setLocalDescription(ans);
   }, []);
 
-  // Handle user call
-  const handleUserCall = async () => {
-    if (!remoteSocketId || !send) {
-      console.error('No remote socket ID or WebSocket connection');
-      return;
-    }
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      });
-      setMyStream(stream);
-      
-      const offer = await peerRef.current.getOffer();
-      if (!offer) {
-        throw new Error('Failed to create offer');
-      }
-      
-      if (send) {
-        send(JSON.stringify({
-          type: 'user:call',
-          to: remoteSocketId,
-          offer
-        }));
-      }
-    } catch (err) {
-      console.error("Error making call:", err);
-    }
-  };
-
-  // Set up peer connection
   useEffect(() => {
-    const currentPeer = peerRef.current;
-    if (!currentPeer.peer) return;
+    if (!peer.peer) return;
+    peer.peer.addEventListener("track", async (ev) => {
+      const remoteStream = ev.streams;
+      console.log("GOT TRACKS!!");
+      setRemoteStream(remoteStream[0]);
+    });
+  }, []);
 
-    const handleTrack = (event: RTCTrackEvent) => {
-      console.log("Received track event:", event);
-      setRemoteStream(event.streams[0]);
-    };
-
-    const handleIceCandidate = (event: RTCPeerConnectionIceEvent) => {
-      if (event.candidate && remoteSocketId && send) {
-        send(JSON.stringify({
-          type: 'ice-candidate',
-          to: remoteSocketId,
-          candidate: event.candidate
-        }));
-      }
-    };
-
-    currentPeer.peer.addEventListener('track', handleTrack);
-    currentPeer.peer.addEventListener('icecandidate', handleIceCandidate);
-
-    // Add local stream to peer connection if available
-    if (myStream) {
-      myStream.getTracks().forEach(track => {
-        currentPeer.peer?.addTrack(track, myStream);
-      });
-    }
+  useEffect(() => {
+    socket.on("user:joined", handleUserJoined);
+    socket.on("incomming:call", handleIncommingCall);
+    socket.on("call:accepted", handleCallAccepted);
+    socket.on("peer:nego:needed", handleNegoNeedIncomming);
+    socket.on("peer:nego:final", handleNegoNeedFinal);
 
     return () => {
-      if (currentPeer.peer) {
-        currentPeer.peer.removeEventListener('track', handleTrack);
-        currentPeer.peer.removeEventListener('icecandidate', handleIceCandidate);
-      }
+      socket.off("user:joined", handleUserJoined);
+      socket.off("incomming:call", handleIncommingCall);
+      socket.off("call:accepted", handleCallAccepted);
+      socket.off("peer:nego:needed", handleNegoNeedIncomming);
+      socket.off("peer:nego:final", handleNegoNeedFinal);
     };
-  }, [myStream, send, remoteSocketId]);
-
-  // Handle WebSocket messages
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      try {
-        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        console.log("Received message:", data);
-
-        switch (data.type) {
-          case 'user:joined':
-            handleUserJoined(data.email, data.socketId);
-            break;
-          case 'incoming:call':
-            handleIncomingCall(data.from, data.offer);
-            break;
-          case 'call:accepted':
-            handleCallAccepted(data.from, data.ans);
-            break;
-          case 'room:join':
-            console.log('Room joined successfully:', data);
-            break;
-          case 'user:left':
-            console.log('User left:', data.socketId);
-            if (data.socketId === remoteSocketId) {
-              setRemoteSocketId(null);
-              setRemoteStream(null);
-            }
-            break;
-          case 'ice-candidate':
-            if (data.candidate) {
-              peerRef.current.peer?.addIceCandidate(new RTCIceCandidate(data.candidate))
-                .catch(e => console.error('Error adding ICE candidate:', e));
-            }
-            break;
-          default:
-            console.log("Unknown message type:", data.type);
-        }
-      } catch (err) {
-        console.error("Error handling message:", err);
-      }
-    };
-
-    // Add the message listener using the context's addEventListener
-    addEventListener('message', handleMessage);
-    
-    // Clean up the event listener when the component unmounts
-    return () => {
-      removeEventListener('message', handleMessage);
-    };
-  }, [addEventListener, removeEventListener, remoteSocketId, handleUserJoined, handleIncomingCall, handleCallAccepted]);
+  }, [
+    socket,
+    handleUserJoined,
+    handleIncommingCall,
+    handleCallAccepted,
+    handleNegoNeedIncomming,
+    handleNegoNeedFinal,
+  ]);
 
   return (
-    <div style={{ padding: '20px' }}>
-      <h1>Video Call</h1>
-      
-      <div style={{ display: 'flex', gap: '20px', marginBottom: '20px' }}>
-        {myStream && (
-          <div style={{ border: '1px solid #ccc', padding: '10px', borderRadius: '8px' }}>
-            <h3>My Stream</h3>
-            <ReactPlayer
-              playing
-              muted
-              height="180px"
-              width="320px"
-              url={myStream}
-            />
-          </div>
-        )}
-        
-        {remoteStream && (
-          <div style={{ border: '1px solid #4CAF50', padding: '10px', borderRadius: '8px' }}>
-            <h3>Remote Stream</h3>
-            <ReactPlayer
-              playing
-              height="180px"
-              width="320px"
-              url={remoteStream}
-            />
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-        {remoteSocketId ? (
-          <button 
-            onClick={handleUserCall}
-            style={{
-              padding: '10px 20px',
-              backgroundColor: '#4CAF50',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            Start Call
-          </button>
-        ) : (
-          <p>Waiting for another user to join...</p>
-        )}
-      </div>
-
-      <div>
-        <h3>Connection Status</h3>
-        <p>Remote User: {remoteSocketId ? 'Connected' : 'Not connected'}</p>
-        {remoteSocketId && <p>Remote Socket ID: {remoteSocketId}</p>}
-      </div>
+    <div>
+      <h1>Room Page</h1>
+      <h4>{remoteSocketId ? "Connected" : "No one in room"}</h4>
+      {myStream && <button onClick={sendStreams}>Send Stream</button>}
+      {remoteSocketId && <button onClick={handleCallUser}>CALL</button>}
+      {myStream && (
+        <>
+          <h1>My Stream</h1>
+          <ReactPlayer
+            playing
+            muted
+            height="100px"
+            width="200px"
+            url={myStream}
+          />
+        </>
+      )}
+      {remoteStream && (
+        <>
+          <h1>Remote Stream</h1>
+          <ReactPlayer
+            playing
+            muted
+            height="100px"
+            width="200px"
+            url={remoteStream}
+          />
+        </>
+      )}
     </div>
   );
 };
+
+export default Room;

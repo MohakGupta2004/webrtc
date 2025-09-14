@@ -1,173 +1,64 @@
-import { useState } from "react";
-import { useSocket } from "./SocketContext";
+import React, { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useSocket } from "./SocketContext";
 
-export const Home = () => {
-  const { socket, isConnected } = useSocket();
-  const [email, setEmail] = useState<string>('');
-  const [roomID, setRoomID] = useState<string>('');
-  const [error, setError] = useState<string>('');
+const Home = () => {
+  const [email, setEmail] = useState("");
+  const [room, setRoom] = useState("");
+
+  const socket = useSocket();
   const navigate = useNavigate();
 
-  const handleJoinRoom = () => {
-    if (!email || !roomID) {
-      setError('Please enter both email and room ID');
-      return;
-    }
+  const handleSubmitForm = useCallback(
+    (e: any) => {
+      e.preventDefault();
+      socket.emit("room:join", { email, room });
+    },
+    [email, room, socket]
+  );
 
-    if (!isConnected || !socket) {
-      setError('Not connected to server. Please try again.');
-      return;
-    }
+  const handleJoinRoom = useCallback(
+    (data: {
+      email: string;
+      room: string;
+    }) => {
+      const { room } = data;
+      navigate(`/room/${room}`);
+    },
+    [navigate]
+  );
 
-    try {
-      const roomId = roomID.trim();
-socket.send(JSON.stringify({ 
-        type: 'join-room', 
-        email: email.trim(), 
-        room: roomId 
-      }));
-      
-      navigate(`/room/${roomId}`, { 
-        state: { email: email.trim() } 
-      });
-    } catch (err) {
-      console.error('Error joining room:', err);
-      setError('Failed to join room. Please try again.');
-    }
-  };
+  useEffect(() => {
+    socket.on("room:join", handleJoinRoom);
+    return () => {
+      socket.off("room:join", handleJoinRoom);
+    };
+  }, [socket, handleJoinRoom]);
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      minHeight: '100vh',
-      backgroundColor: '#f5f5f5',
-      padding: '20px',
-      textAlign: 'center'
-    }}>
-      <div style={{
-        backgroundColor: 'white',
-        padding: '2rem',
-        borderRadius: '8px',
-        boxShadow: '0 2px 10px rgba(0, 0, 0, 0.1)',
-        width: '100%',
-        maxWidth: '400px'
-      }}>
-        <h2 style={{ marginBottom: '1.5rem', color: '#333' }}>Join a Video Call</h2>
-        
-        <div style={{ marginBottom: '1rem', textAlign: 'left' }}>
-          <label style={{
-            display: 'block',
-            marginBottom: '0.5rem',
-            fontWeight: '500',
-            color: '#555'
-          }}>
-            Email
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Enter your email"
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
-              fontSize: '1rem',
-              marginBottom: '1rem'
-            }}
-          />
-        </div>
-
-        <div style={{ marginBottom: '1.5rem', textAlign: 'left' }}>
-          <label style={{
-            display: 'block',
-            marginBottom: '0.5rem',
-            fontWeight: '500',
-            color: '#555'
-          }}>
-            Room ID
-          </label>
-          <input
-            type="text"
-            value={roomID}
-            onChange={(e) => setRoomID(e.target.value)}
-            placeholder="Enter room ID"
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
-              fontSize: '1rem',
-              marginBottom: '1rem'
-            }}
-          />
-        </div>
-
-        {error && (
-          <div style={{
-            color: '#e53e3e',
-            marginBottom: '1rem',
-            fontSize: '0.875rem'
-          }}>
-            {error}
-          </div>
-        )}
-
-        <button
-          onClick={handleJoinRoom}
-          disabled={!isConnected}
-          style={{
-            width: '100%',
-            padding: '0.75rem',
-            backgroundColor: isConnected ? '#4CAF50' : '#9E9E9E',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            fontSize: '1rem',
-            fontWeight: '500',
-            cursor: isConnected ? 'pointer' : 'not-allowed',
-            transition: 'background-color 0.2s',
-            marginBottom: '1rem'
-          }}
-          onMouseOver={(e) => {
-            if (isConnected) {
-              e.currentTarget.style.backgroundColor = '#45a049';
-            }
-          }}
-          onMouseOut={(e) => {
-            if (isConnected) {
-              e.currentTarget.style.backgroundColor = '#4CAF50';
-            }
-          }}
-        >
-          {isConnected ? 'Join Room' : 'Connecting...'}
-        </button>
-
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          marginTop: '1rem',
-          color: isConnected ? '#4CAF50' : '#E53E3E',
-          fontSize: '0.875rem',
-          fontWeight: '500'
-        }}>
-          <div style={{
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            backgroundColor: isConnected ? '#4CAF50' : '#E53E3E',
-            marginRight: '0.5rem'
-          }} />
-          {isConnected ? 'Connected to server' : 'Disconnected from server'}
-        </div>
-      </div>
+    <div>
+      <h1>Lobby</h1>
+      <form onSubmit={handleSubmitForm}>
+        <label htmlFor="email">Email ID</label>
+        <input
+          type="email"
+          id="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <br />
+        <label htmlFor="room">Room Number</label>
+        <input
+          type="text"
+          id="room"
+          value={room}
+          onChange={(e) => setRoom(e.target.value)}
+        />
+        <br />
+        <button>Join</button>
+      </form>
     </div>
   );
 };
 
+export default Home;
